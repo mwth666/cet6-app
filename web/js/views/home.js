@@ -37,6 +37,8 @@
     const streak = Store.streak();
     const day = Store.getDay() || {};
     const doneToday = (day.n || 0) + (day.r || 0);
+    // 今天被评过分的词——就是回顾长文要用的那批词
+    const todayWords = window.Article ? window.Article.entriesOn(window.App.dayKey()).length : 0;
     const left = plan.leftNew + plan.due;
     const pct = plan.quota + plan.due > 0
       ? Math.min(100, Math.round((doneToday / (plan.quota + plan.due)) * 100))
@@ -67,6 +69,22 @@
           ${ring(days, 30)}
         </div>
       </div>
+
+      ${
+        todayWords
+          ? `<div class="card art-entry" data-act="article">
+        <div class="grow">
+          <div class="row wrap" style="gap:8px;margin-bottom:5px">
+            <span class="tag tag-ok">今日回顾</span>
+            <span class="tiny muted">今天的 ${todayWords} 个词</span>
+          </div>
+          <div class="card-t" style="margin-bottom:3px">把今天的词连成一篇长文，再读一遍</div>
+          <div class="tiny muted">每句都是该词自带的真实例句，按主题编组。读完相当于把今天的词在语境里重新过了一次。</div>
+        </div>
+        <span class="arrow">›</span>
+      </div>`
+          : ''
+      }
 
       <div class="grid4">
         <div class="card" style="margin:0"><div class="stat">
@@ -129,6 +147,7 @@
 
     App.on(root, {
       study: () => Router.go('/study'),
+      article: () => Router.go('/article'),
       screen: () => Router.go('/screen'),
       go: (t) => Router.go(t.dataset.to),
     });

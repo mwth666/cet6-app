@@ -19,10 +19,10 @@ const IRREGULAR = {
   spit: 'spat', shake: 'shook', buy: 'bought', ring: 'rang', break: 'broke',
   lay: 'laid', ally: 'allies', arise: 'arose', bear: 'bore', begin: 'began',
   catch: 'caught', choose: 'chose', draw: 'drew', drink: 'drank', drive: 'drove',
-  eat: 'ate', fall: 'fell', fight: 'fought', fly: 'flew', forget: 'forgot',
+  eat: 'ate', fall: ['fell', 'fallen'], fight: 'fought', fly: 'flew', forget: 'forgot',
   freeze: 'froze', give: 'gave', grow: 'grew', hide: 'hid', hold: 'held',
   keep: 'kept', know: 'knew', lead: 'led', lie: 'lay', lose: 'lost', meet: 'met',
-  pay: 'paid', ride: 'rode', rise: 'rose', run: 'ran', say: 'said', see: 'saw',
+  pay: 'paid', ride: 'rode', rise: ['rose', 'risen'], run: 'ran', say: 'said', see: 'saw',
   seek: 'sought', sell: 'sold', sing: 'sang', sink: 'sank', speak: 'spoke',
   spend: 'spent', steal: 'stole', swim: 'swam', tear: 'tore', tell: 'told',
   think: 'thought', wear: 'wore', win: 'won', write: 'wrote', mouse: 'mice',
@@ -36,13 +36,18 @@ function morphForms(w) {
     if (x && out.indexOf(x) < 0) out.push(x);
   };
   push(b);
-  push(IRREGULAR[b]);
+  const irr = IRREGULAR[b];
+  if (Array.isArray(irr)) irr.forEach(push);
+  else push(irr);
   push(b + 's');
   push(b + 'es');
   push(b + 'ed');
   push(b + 'd');
   push(b + 'ing');
   push(b + 'er');
+  push(b + 'est');
+  push(b + 'ers');
+  push(b + 'ued');
   push(b.replace(/e$/, '') + 'ing');
   push(b.replace(/e$/, '') + 'ed');
   push(b + b.slice(-1) + 'ed');
@@ -60,21 +65,42 @@ function letters(s) {
   return s.toLowerCase().replace(/[^a-z]/g, '');
 }
 
+// 找这个词"独立出现"的位置——前后都不能紧挨字母。
+// 否则 a 会命中 earns、sit 会命中 Visitors、or 会命中 report 里的 or，
+// 挖空就挖到别的单词里去了。找不到返回 -1。
+function wholeIndex(sentence, word) {
+  const re = new RegExp('(^|[^A-Za-z])' + esc(word) + '(?![A-Za-z])', 'i');
+  const m = re.exec(sentence);
+  return m ? m.index + m[1].length : -1;
+}
+
 // 在句子中定位目标词；兼容不规则变化、连字符/空格差异、简单屈折
 function findMatch(sentence, word) {
   if (!sentence || !word) return null;
   const w = word.toLowerCase().replace(/\s+/g, ' ').trim();
   const low = sentence.toLowerCase();
 
-  let idx = low.indexOf(w);
+  const idx = wholeIndex(sentence, w);
   if (idx >= 0) {
     let end = idx + w.length;
-    // 原词在句中是变形时（abandon → abandoned），要连屈折后缀一起挖掉。
-    // 否则挖空会长成 "They [abandon]ed the plan."，把答案的后缀露在外面。
-    // 只吃屈折后缀（时态、复数、进行时），派生后缀（-ment/-ness/-ion）属于另一个词，不动。
-    const tail = low.slice(end);
-    const inflect = /^(s|es|ed|ing)\b/.exec(tail);
-    if (inflect) end += inflect[0].length;
+    // 句中是变形时（abandon → abandoned），要连后缀一起算进去。
+    // 否则挖空会长成 "They [abandon]ed the plan."，把答案的尾巴露在空外面。
+    const hitWord = (/^[a-z][a-z'\u2019-]*/.exec(low.slice(idx)) || [w])[0];
+    if (hitWord !== w && hitWord.length > w.length && hitWord.length - w.length <= 6) {
+      let grow = false;
+      if (morphForms(w).indexOf(hitWord) >= 0) {
+        grow = true;
+      } else {
+        const tailStr = hitWord.slice(w.length);
+        // 只算屈折（时态、复数、比较级）；-ion/-ment/-ness 属于另一个词，不算
+        if (/^(s|es|ed|ing|ings|er|ers|est|ests|ies|ied|ued|d)$/.test(tailStr)) grow = true;
+        // 双写辅音：admit→admitted、spot→spotted、transfer→transferred
+        else if (new RegExp('^' + esc(w.slice(-1)) + '(ed|ing|er|ers|est)$').test(tailStr)) {
+          grow = true;
+        }
+      }
+      if (grow) end = idx + hitWord.length;
+    }
     return { start: idx, end: end };
   }
 

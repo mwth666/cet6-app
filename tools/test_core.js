@@ -189,15 +189,46 @@ eq(dupOpt, 0, '选项重复数');
 // findMatch(sentence, word, ...) => { start, end } 或 null
 let noPos = 0;
 const badWords = [];
+let cut = 0;
+const cutWords = [];
 wordsRaw.forEach((e) => {
   if (!e.s) return;
   const m = Quiz.findMatch(e.s, e.w);
   if (!m || m.start == null || m.end <= m.start) {
     noPos++;
     if (badWords.length < 8) badWords.push(e.w);
+    return;
+  }
+  // 命中区间必须落在完整的单词边界上：
+  // 前面不能是字母（否则 a 会挖进 earns），后面不能是字母（否则 decreased 会被切成 decrease + d）
+  const before = m.start > 0 ? e.s[m.start - 1] : '';
+  const after = e.s[m.end] || '';
+  if ((before && /[A-Za-z]/.test(before)) || (after && /[A-Za-z]/.test(after))) {
+    cut++;
+    if (cutWords.length < 8) cutWords.push(e.w + ':' + e.s.slice(m.start, m.end + 2));
   }
 });
-ok(noPos === 0, `例句中定位失败的词（${noPos}/5301，示例 ${badWords.join(' ')}）`);
+// 只剩极少数词的例句用的是派生词（construction / seriously / weekend），
+// 那不是"定位失败"，而是句子里确实没出现这个词，允许留几个
+ok(noPos <= 5, `例句中定位失败的词（${noPos}/5301，示例 ${badWords.join(' ')}）`);
+eq(cut, 0, `高亮/挖空被切断的词（示例 ${cutWords.join(' ')}）`);
+
+// 短词必须按独立单词匹配，不能命中别的单词内部
+[
+  ['He earns a thousand dollars a month.', 'a', 'a'],
+  ['Visitors must sit quietly during the performance.', 'sit', 'sit'],
+  ['You can submit the report today, or wait until Monday.', 'or', 'or'],
+  ['Researchers search for new ways.', 'search', 'search'],
+  ['We plan to visit the museum this weekend.', 'week', null],
+].forEach(([sent, word, want]) => {
+  const m = Quiz.findMatch(sent, word);
+  if (want === null) {
+    ok(!m, `「${word}」不该命中 ${sent.slice(0, 24)}… 里的其他单词`);
+    return;
+  }
+  ok(!!m, `「${word}」应能在句中定位`);
+  if (m) eq(sent.slice(m.start, m.end).toLowerCase(), want, `「${word}」命中的应是独立单词`);
+});
 
 // 七种题型都要能真实生成（不是全部降级）
 TYPES.forEach((t) => {

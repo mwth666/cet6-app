@@ -78,13 +78,90 @@
     speak(s, { rate: 0.62 });
   }
 
+  let seqToken = 0;
+
   function stop() {
+    seqToken++;
     if (synth) synth.cancel();
+  }
+
+  // 连续朗读一组句子（读长文用）。
+  // hooks: { each(i) 每句开始前, done() 全部读完 }
+  // 返回一个函数，调用即停止。
+  function speakQueue(list, hooks) {
+    const h = hooks || {};
+    const arr = (list || []).filter(Boolean);
+    if (!arr.length || CFG.audio.provider === 'off' || !synth || state === 'off') {
+      if (h.done) h.done();
+      return function () {};
+    }
+    const my = ++seqToken;
+    let i = 0;
+    let stopped = false;
+
+    function step() {
+      if (stopped || my !== seqToken) return;
+      if (i >= arr.length) {
+        if (h.done) h.done();
+        return;
+      }
+      const idx = i++;
+      if (h.each) h.each(idx);
+      const u = new SpeechSynthesisUtterance(String(arr[idx]));
+      u.lang = enVoice ? enVoice.lang : 'en-US';
+      if (enVoice) u.voice = enVoice;
+      u.rate = CFG.audio.rate;
+      u.pitch = CFG.audio.pitch;
+      // 有的浏览器 onend 偶发不触发，兜底用句子长度估个超时
+      let advanced = false;
+      const guard = setTimeout(() => {
+        if (advanced) return;
+        advanced = true;
+        step();
+      }, 1200 + String(arr[idx]).length * 90);
+      u.onend = () => {
+        if (advanced) return;
+        advanced = true;
+        clearTimeout(guard);
+        if (stopped || my !== seqToken) return;
+        step();
+      };
+      u.onerror = () => {
+        if (advanced) return;
+        advanced = true;
+        clearTimeout(guard);
+        if (stopped || my !== seqToken) return;
+        step();
+      };
+      try {
+        synth.speak(u);
+      } catch (err) {
+        clearTimeout(guard);
+        lastError = String(err.message || err);
+      }
+    }
+
+    step();
+
+    return function cancel() {
+      stopped = true;
+      if (my === seqToken) seqToken++;
+      if (synth) synth.cancel();
+    };
   }
 
   function status() {
     return { state, ready: available(), voice: enVoice ? enVoice.name : '', error: lastError };
   }
 
-  window.Audio2 = { speak, speakWord, speakSentence, speakSlow, stop, available, status };
+  window.Audio2 = {
+    speak,
+    speakWord,
+    speakSentence,
+    speakSlow,
+    speakQueue,
+    stop,
+    available,
+    status,
+  };
 })();

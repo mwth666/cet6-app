@@ -316,12 +316,18 @@
             <div class="stat"><div class="v" style="color:#12a150">${right}</div><div class="l">答对</div></div>
             <div class="stat"><div class="v" style="color:#e0483c">${wrong}</div><div class="l">答错</div></div>
           </div>
-          <div class="row" style="justify-content:center;gap:10px;margin-top:18px">
-            <button class="btn btn-primary" data-act="again">再来一轮</button>
+          <div class="divider"></div>
+          <div class="tiny muted" style="line-height:1.7">
+            这一轮的词已经编成一篇长文——每句都是该词自带的例句，按主题排开，读一遍等于在语境里再过一次。
+          </div>
+          <div class="row" style="justify-content:center;gap:10px;margin-top:16px;flex-wrap:wrap">
+            <button class="btn btn-primary" data-act="article">读今日回顾长文</button>
+            <button class="btn" data-act="again">再来一轮</button>
             <button class="btn" data-act="home">回首页</button>
           </div>
         </div>`;
       App.on(root, {
+        article: () => Router.go('/article'),
         again: () => Router.go('/study?t=' + Date.now(), true),
         home: () => Router.go('/home'),
       });
