@@ -1,0 +1,22 @@
+# 学习进度（每个人自己的数据，绝不进仓库）
+userdata/
+*.db
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 测试产生的临时文件
+.test/
+*.log
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
