@@ -11,9 +11,11 @@
 需要 Python 3.9 或更高版本（[官网下载](https://www.python.org/downloads/)，Windows 安装时记得勾选 `Add Python to PATH`）。
 
 ```bash
-git clone <这个仓库的地址>
+git clone https://github.com/mwth666/cet6-app.git
 cd cet6-app
 ```
+
+不想装 Git 也行：打开 [github.com/mwth666/cet6-app](https://github.com/mwth666/cet6-app)，点绿色 `Code` → `Download ZIP`，解压后进目录，同样双击启动。
 
 **Windows**：双击 `start.bat`
 
