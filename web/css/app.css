@@ -81,7 +81,8 @@ h1, h2, h3, h4 { margin: 0; font-weight: 600; line-height: 1.4; }
   width: 9px; height: 9px; border-radius: 3px;
   background: linear-gradient(135deg, var(--blue), #7aa3ff);
 }
-.tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none;
+  min-width: 0; flex: 1 1 auto; }
 .tabs::-webkit-scrollbar { display: none; }
 .tabs a {
   padding: 7px 13px; border-radius: 9px; font-size: 14px;
@@ -552,6 +553,7 @@ h1, h2, h3, h4 { margin: 0; font-weight: 600; line-height: 1.4; }
 
 /* 章节跳转条：跟着滚，随时能换章 */
 .art-nav {
+  min-width: 0;
   position: sticky;
   top: 56px;
   z-index: 30;
@@ -748,4 +750,14 @@ h1, h2, h3, h4 { margin: 0; font-weight: 600; line-height: 1.4; }
   border-color: var(--blue);
   box-shadow: 0 8px 26px -14px rgba(47, 107, 255, .55);
   transform: translateY(-1px);
+}
+
+/* 窄屏：6 个标签挤不下，收紧间距让「我的」不用横滑就能看到 */
+@media (max-width: 480px) {
+  .topbar { gap: 8px; padding: 0 10px; }
+  .brand { font-size: 14px; gap: 6px; }
+  .tabs { gap: 0; }
+  .tabs a { padding: 6px 8px; font-size: 13px; border-radius: 8px; }
+  .art-title { font-size: 19px; }
+  .art-nav-i { padding: 4px 9px; font-size: 12px; }
 }
