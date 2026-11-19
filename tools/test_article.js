@@ -152,6 +152,24 @@ console.log('[5] 段落和章节的形态');
   ok(!/^(the|a|an)\s/.test(art.title), `标题不该以小写冠词开头：${art.title}`);
 }
 
+console.log('[5b] 标题不能把主题名里的 and 叠成病句');
+{
+  // 主题名自身带 and（places and things / odds and ends），
+  // 双名模板会拼出 "Between A and B and C and D"，这里扫多天确保不出现
+  let bad = 0;
+  let sample = '';
+  for (let k = 0; k < 200; k++) {
+    const n = 120 + (k % 7) * 30;
+    const art = Article.compose(entriesOf(Array.from({ length: n }, (_, i) => i * 13 + k)), 't' + k);
+    const cnt = (art.title.match(/ and /gi) || []).length;
+    if (cnt > 1) {
+      bad++;
+      if (!sample) sample = art.title;
+    }
+  }
+  eq(bad, 0, `标题出现多个 and：${sample}`);
+}
+
 console.log('[6] 边界与健壮性');
 {
   const empty = Article.compose([], 'e');
@@ -180,8 +198,55 @@ console.log('[6] 边界与健壮性');
   eq(s1.stats.sents, 1, '同一句应只收一次');
 }
 
-console.log('[7] 性能：166 词的今天，生成要够快');
+// 相邻句共享实词的比例，用来衡量"像不像一段话"而不是"像不像清单"。
+// 语料里大多数句子彼此无关，能连的只有一小部分：随机顺序约 2%，
+// 按共享实词串链后约 13%。门槛放在 5%，掉到随机水平就说明串链失效了。
+const STOPC = (
+  'a the an and or of to in on at by for with from as is are was were be been being ' +
+  'it its this that these those he she they them his her their our we you your i ' +
+  'has have had do does did not but if so no up down out off into over about after ' +
+  'before because than then also only more most some any all one two can could will ' +
+  'would should may might must such very much many just even like who which what when where how'
+).split(/\s+/).reduce((o, w) => ((o[w] = 1), o), Object.create(null));
+
+function contentSet(t) {
+  const o = Object.create(null);
+  String(t || '')
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, ' ')
+    .split(/\s+/)
+    .forEach((w) => {
+      if (w.length > 3 && !STOPC[w]) o[w] = 1;
+    });
+  return o;
+}
+function shareWord(x, y) {
+  const b = contentSet(y);
+  for (const k in contentSet(x)) if (b[k]) return true;
+  return false;
+}
+
+console.log('[6b] 句子排序：相邻句要尽量共享实词，别退化成清单');
 {
+  let pairs = 0;
+  let hit = 0;
+  for (let k = 0; k < 12; k++) {
+    const art = Article.compose(entriesOf(Array.from({ length: 166 }, (_, i) => i * 29 + k)), 'adj' + k);
+    art.chapters.forEach((c) =>
+      c.paras.forEach((p) => {
+        for (let j = 1; j < p.length; j++) {
+          pairs++;
+          if (shareWord(p[j - 1].text, p[j].text)) hit++;
+        }
+      })
+    );
+  }
+  const rate = hit / pairs;
+  ok(rate > 0.05, `相邻句共享实词比例只有 ${(rate * 100).toFixed(1)}%，接近随机顺序`);
+  console.log(`    相邻句共享实词 ${(rate * 100).toFixed(1)}%（随机顺序约 2%）`);
+}
+
+console.log('[7] 性能：166 词的今天，生成要够快');{
   const ent = entriesOf(Array.from({ length: 166 }, (_, k) => k * 29));
   const t0 = Date.now();
   for (let i = 0; i < 20; i++) Article.compose(ent, 'perf' + i);

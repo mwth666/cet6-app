@@ -154,6 +154,9 @@
   // 拼起来会变成 "Elsewhere, The report called for..." 这种错；要修就得猜
   // 首词是不是专有名词，猜错更难看。句子保持原样最稳，节奏交给分段和标题。
 
+  // 主题名本身可能带 and（"places and things"、"odds and ends"），
+  // 再套进 "Between A and B" 会连成 "Between Places and Things and Odds and Ends"，
+  // 读起来像口误。所以这两个双名模板只在两个名字都干净时才进候选池。
   const TITLES = [
     (a, b, n) => `One Page, ${n} Words`,
     (a, b, n) => `Between ${cap(a)} and ${cap(b)}`,
@@ -162,6 +165,7 @@
     (a, b, n) => `Words From ${cap(a)}`,
     (a, b, n) => `${n} Words, One Pass`,
   ];
+  const TITLES_NEED_TWO = [1, 2];
 
   const OPENS = [
     (n, m) => `Here is today's page — ${n} words, ${m} sentences, put back together in one reading.`,
@@ -201,6 +205,13 @@
         return w.charAt(0).toUpperCase() + w.slice(1);
       })
       .join(' ');
+  }
+
+  // 主题名里已经有 and / or / 逗号时，双名模板会读成病句，退回纯数字模板
+  function titlePool(names) {
+    const dirty = names.some((s) => / and | or |&|,/.test(String(s || '')));
+    if (!dirty) return TITLES;
+    return TITLES.filter((_, i) => TITLES_NEED_TWO.indexOf(i) < 0);
   }
 
   // ---------------- 句子清洗与筛选 ----------------
@@ -286,6 +297,73 @@
     };
   }
 
+  // ---------------- 句子排序 ----------------
+  // 每个词只贡献自己那一个例句，句子之间本来毫无关系，直接按抽签顺序排
+  // 就是「一句一个人」的清单感。这里按共享实词把句子串成链：下一个总挑
+  // 和最近两句重叠最多的那句，同一个人/物/话题就自然挨在一起了。
+  // 完全无重叠时退回原顺序，绝不会卡住；过程无随机数，同 seed 结果不变。
+
+  const STOP = {
+    that: 1, this: 1, these: 1, those: 1, there: 1, their: 1, them: 1, they: 1,
+    have: 1, has: 1, had: 1, will: 1, would: 1, was: 1, were: 1, been: 1, being: 1,
+    from: 1, with: 1, what: 1, when: 1, where: 1, which: 1, while: 1, than: 1,
+    then: 1, some: 1, such: 1, more: 1, most: 1, much: 1, many: 1, very: 1,
+    into: 1, over: 1, also: 1, only: 1, even: 1, just: 1, about: 1, after: 1,
+    before: 1, because: 1, other: 1, again: 1, your: 1, you: 1, our: 1, his: 1,
+    her: 1, its: 1, does: 1, did: 1, not: 1, all: 1, any: 1, can: 1, could: 1,
+    should: 1, shall: 1, may: 1, might: 1, must: 1, here: 1, how: 1, why: 1,
+    who: 1, whom: 1, whose: 1, one: 1, two: 1, out: 1, off: 1, onto: 1, upon: 1,
+    like: 1, make: 1, made: 1, take: 1, took: 1, said: 1, says: 1, thing: 1,
+    things: 1, time: 1, people: 1, year: 1, years: 1, day: 1, days: 1,
+  };
+
+  function tokenSet(text) {
+    const out = Object.create(null);
+    String(text || '')
+      .toLowerCase()
+      .replace(/[^a-z\s']/g, ' ')
+      .split(/\s+/)
+      .forEach((w) => {
+        if (w.length > 3 && !STOP[w]) out[w] = 1;
+      });
+    return out;
+  }
+
+  function overlap(a, b) {
+    let n = 0;
+    for (const k in b) if (a[k]) n++;
+    return n;
+  }
+
+  function chainSentences(list) {
+    if (list.length < 4) return list;
+    const sets = list.map((x) => tokenSet(x.sent.text));
+    const used = new Array(list.length).fill(false);
+    const order = [0];
+    used[0] = true;
+    let prev = 0; // 上一句在 list 里的下标
+    let prev2 = 0; // 上上句
+    for (let step = 1; step < list.length; step++) {
+      let best = -1;
+      let bestScore = 0;
+      for (let i = 0; i < list.length; i++) {
+        if (used[i]) continue;
+        // 最近一句权重更高：相邻两句呼应才像一段话
+        const sc = overlap(sets[i], sets[prev]) * 3 + overlap(sets[i], sets[prev2]);
+        if (sc > bestScore) {
+          bestScore = sc;
+          best = i;
+        }
+      }
+      if (best < 0) best = used.indexOf(false);
+      used[best] = true;
+      order.push(best);
+      prev2 = prev;
+      prev = best;
+    }
+    return order.map((i) => list[i]);
+  }
+
   // ---------------- 组装 ----------------
 
   /**
@@ -361,15 +439,16 @@
     }
 
     const chapters = big.map((g) => {
-      // 每段 5–7 句，接近六级阅读的段落密度
+      // 先按共享实词串成链，再切段：每段 5–7 句，接近六级阅读的段落密度
+      const ordered = chainSentences(g.list);
       const paras = [];
       let k = 0;
-      while (k < g.list.length) {
+      while (k < ordered.length) {
         let size = 5 + Math.floor(rand() * 3);
-        const rest = g.list.length - k;
+        const rest = ordered.length - k;
         // 切到最后只剩一两句时并进本段，别留下孤零零的尾巴
         if (rest - size > 0 && rest - size < 3) size = rest;
-        paras.push(g.list.slice(k, k + size).map((x) => x.sent));
+        paras.push(ordered.slice(k, k + size).map((x) => x.sent));
         k += size;
       }
       return {
@@ -391,7 +470,7 @@
       .slice()
       .sort((x, y) => y.n - x.n)
       .map((c) => c.en);
-    const titleFn = pick(TITLES, rand);
+    const titleFn = pick(titlePool(top.slice(0, 2)), rand);
     const openFn = pick(totalInBody === totalSents ? OPENS_SAME : OPENS, rand);
 
     return {
