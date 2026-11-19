@@ -13,7 +13,8 @@ dump 出渲染后的 DOM，检查是否有渲染异常、空白页、兜底报�
   python tools/smoke_routes.py
   python tools/smoke_routes.py --chrome "C:/path/to/chrome.exe"
 
-前提：server.py 已在 8765 端口运行（--port 可改）。
+脚本自己会把后端拉起来（随机端口 + 临时数据目录），不需要事先开服务，
+也不会动你 userdata 里的真实进度。
 """
 
 import argparse
@@ -21,6 +22,10 @@ import os
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
 DEFAULT_CHROME = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -132,43 +137,59 @@ def dump(chrome: str, url: str, prof: str) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--chrome", default=None)
-    ap.add_argument("--base", default=BASE)
+    ap.add_argument("--base", default=None, help="默认自己起后端，用随机端口")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
     chrome = pick_chrome(args.chrome)
     fails = []
 
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        # 数据目录指向临时目录：巡检会写进度，别污染开发机的 userdata
+        os.environ["CET6_USER_DIR"] = os.path.join(tmp, "userdata")
+        import backend  # 必须在设好环境变量之后再导入
+
+        httpd = port = None
+        if args.base:
+            base = args.base
+        else:
+            httpd, port = backend.start_in_thread(port=0)
+            base = f"http://127.0.0.1:{port}/"
+            print(f"  后端已在 {base} 起来（临时数据目录）")
+
         prof = os.path.join(tmp, "prof")
-        for name, path, musts in ROUTES:
-            url = args.base + "#" + path
-            try:
-                dom = dump(chrome, url, prof)
-            except subprocess.TimeoutExpired:
-                fails.append((name, path, "超时"))
-                print(f"  ✗ {name:20} {path:34} 超时")
-                continue
+        try:
+            for name, path, musts in ROUTES:
+                url = base + "#" + path
+                try:
+                    dom = dump(chrome, url, prof)
+                except subprocess.TimeoutExpired:
+                    fails.append((name, path, "超时"))
+                    print(f"  ✗ {name:20} {path:34} 超时")
+                    continue
 
-            hit = [m for m in ERROR_MARKERS if m in dom]
-            if hit:
-                fails.append((name, path, "报错 " + hit[0]))
-                print(f"  ✗ {name:20} {path:34} 报错「{hit[0]}」")
-                continue
+                hit = [m for m in ERROR_MARKERS if m in dom]
+                if hit:
+                    fails.append((name, path, "报错 " + hit[0]))
+                    print(f"  ✗ {name:20} {path:34} 报错「{hit[0]}」")
+                    continue
 
-            if len(dom) < MIN_DOM:
-                fails.append((name, path, f"DOM 仅 {len(dom)}B"))
-                print(f"  ✗ {name:20} {path:34} DOM 仅 {len(dom)}B，疑似空白")
-                continue
+                if len(dom) < MIN_DOM:
+                    fails.append((name, path, f"DOM 仅 {len(dom)}B"))
+                    print(f"  ✗ {name:20} {path:34} DOM 仅 {len(dom)}B，疑似空白")
+                    continue
 
-            if not any(m in dom for m in musts):
-                fails.append((name, path, "缺文案 " + "/".join(musts)))
-                print(f"  ✗ {name:20} {path:34} 缺文案 {musts}")
-                if args.verbose:
-                    print("      ", dom[:400].replace("\n", " "))
-                continue
+                if not any(m in dom for m in musts):
+                    fails.append((name, path, "缺文案 " + "/".join(musts)))
+                    print(f"  ✗ {name:20} {path:34} 缺文案 {musts}")
+                    if args.verbose:
+                        print("      ", dom[:400].replace("\n", " "))
+                    continue
 
-            print(f"  ✓ {name:20} {path:34} {len(dom) // 1024}KB")
+                print(f"  ✓ {name:20} {path:34} {len(dom) // 1024}KB")
+        finally:
+            if httpd is not None:
+                backend.stop(httpd)
 
     print()
     if fails:

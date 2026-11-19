@@ -4,6 +4,11 @@ userdata/
 *.db-wal
 *.db-shm
 
+# 打包产物（几十 MB，不进仓库，发布走 Releases）
+dist/
+build/
+*.spec
+
 # Python
 __pycache__/
 *.py[cod]

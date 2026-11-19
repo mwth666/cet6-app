@@ -1,31 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-六级冲刺 · 本地版
-==================
-一个跑在自己电脑上的英语六级备考工具：背单词（语境记忆 + 间隔重复）、
-听力、阅读、写作、翻译四个模块的专项练习。
+后端：词库加载、进度存取、本地 HTTP 接口
+==========================================
 
-设计原则
---------
-1. 零第三方依赖：只用 Python 标准库，clone 下来 `python server.py` 就能跑。
-   不需要 pip install，不会踩虚拟环境 / 版本冲突的坑。
-2. 数据在本机：学习进度存在 userdata/progress.db（SQLite），卸载重装不丢，
-   也可以随时通过「我的 → 导出备份」拿到一份 JSON。
-3. 不联网：除首次加载页面外不产生任何外部请求，断网可用。
+桌面版（app.py）在后台起一个只监听 127.0.0.1 的 HTTP 服务，原生窗口里加载
+前端页面，页面通过 /api/* 读写数据。之所以不用「前端直接调 Python 函数」的
+桥接方式，是因为词库有 1.7MB，走 HTTP 可以顺带拿到 gzip 和 ETag，窗口启动
+第一屏明显更快；接口边界也更清楚，前端换回浏览器调试时一行不用改。
 
-启动方式
---------
-    python server.py              # 自动打开浏览器，端口 8765
-    python server.py --port 9000  # 指定端口
-    python server.py --no-open    # 不自动开浏览器
+对外只暴露三个函数：
 
-按 Ctrl+C 停止。
+    init_db()              建表
+    start_in_thread(port) 起服务，返回 (httpd, 实际端口)
+    stop(httpd)            停服务
+
+其余都是内部实现。
 """
 
 from __future__ import annotations
 
-import argparse
 import gzip
 import hashlib
 import json
@@ -35,18 +29,57 @@ import sqlite3
 import sys
 import threading
 import time
-import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
-ROOT = Path(__file__).resolve().parent
-DATA_DIR = ROOT / "data"
-WEB_DIR = ROOT / "web"
-USER_DIR = ROOT / "userdata"
+# --------------------------------------------------------------------------
+# 路径：源码运行时以项目根为准；打包后以 PyInstaller 的解包目录为准
+# --------------------------------------------------------------------------
+
+def _bundle_dir() -> Path:
+    """只读资源（web/ data/）所在目录。"""
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    return Path(__file__).resolve().parent
+
+
+def _user_dir() -> Path:
+    """
+    可写的用户数据目录。优先放在程序旁边（绿色版，拷走就能带走进度）；
+    如果程序装在 Program Files 这类没写权限的地方，退到 %LOCALAPPDATA%。
+
+    设置环境变量 CET6_USER_DIR 可以指到别处，测试脚本用这个避免碰真进度。
+    """
+    override = os.environ.get("CET6_USER_DIR")
+    if override:
+        d = Path(override)
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    if getattr(sys, "frozen", False):
+        cand = Path(sys.executable).parent / "userdata"
+    else:
+        cand = Path(__file__).resolve().parent / "userdata"
+    try:
+        cand.mkdir(parents=True, exist_ok=True)
+        probe = cand / ".write-test"
+        probe.write_bytes(b"1")
+        probe.unlink()
+        return cand
+    except OSError:
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home())
+        fallback = base / "CET6Sprint"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+
+BASE_DIR = _bundle_dir()
+DATA_DIR = BASE_DIR / "data"
+WEB_DIR = BASE_DIR / "web"
+USER_DIR = _user_dir()
 DB_PATH = USER_DIR / "progress.db"
 
-# 单个 HTTP 请求体上限，防止误传超大文件把内存吃满
+# 单个请求体上限，防止误传超大文件把内存吃满
 MAX_BODY = 32 * 1024 * 1024
 
 _lock = threading.Lock()
@@ -60,7 +93,7 @@ _cache: dict[str, tuple[bytes, str]] = {}
 
 
 def _load_bytes(path: Path, key: str) -> tuple[bytes, str]:
-    """读取并缓存文件内容，同时算出 ETag 供浏览器缓存协商。"""
+    """读取并缓存文件内容，同时算出 ETag 供缓存协商。"""
     if key in _cache:
         return _cache[key]
     raw = path.read_bytes()
@@ -70,7 +103,7 @@ def _load_bytes(path: Path, key: str) -> tuple[bytes, str]:
 
 
 def words_payload() -> tuple[bytes, str]:
-    """全量词库。5301 词，约 1.7MB，压缩后约 500KB，本地传输可忽略。"""
+    """全量词库。5301 词，约 1.7MB，压缩后约 500KB。"""
     return _load_bytes(DATA_DIR / "words.json", "words")
 
 
@@ -87,6 +120,10 @@ def content_payload() -> tuple[bytes, str]:
     etag = '"' + hashlib.md5(raw).hexdigest()[:16] + '"'
     _cache["content"] = (raw, etag)
     return _cache["content"]
+
+
+def has_words() -> bool:
+    return (DATA_DIR / "words.json").exists()
 
 
 # --------------------------------------------------------------------------
@@ -116,6 +153,8 @@ DEFAULT_STATE = {
     "screenPos": {},
 }
 
+_KV_KEYS = ("settings", "screen", "fav", "days", "drafts", "screenPos")
+
 
 def db() -> sqlite3.Connection:
     con = sqlite3.connect(DB_PATH, timeout=10)
@@ -125,15 +164,20 @@ def db() -> sqlite3.Connection:
 
 def init_db() -> None:
     USER_DIR.mkdir(parents=True, exist_ok=True)
-    with db() as con:
+    con = db()
+    try:
         con.executescript(SCHEMA)
+        con.commit()
+    finally:
+        con.close()
 
 
 def read_state() -> dict:
     """把整份学习进度读出来，格式与前端 store 一一对应。"""
     state = {k: (v.copy() if isinstance(v, dict) else list(v) if isinstance(v, list) else v)
              for k, v in DEFAULT_STATE.items()}
-    with db() as con:
+    con = db()
+    try:
         for k, v in con.execute("SELECT k, v FROM kv"):
             try:
                 state[k] = json.loads(v)
@@ -146,6 +190,8 @@ def read_state() -> dict:
             except json.JSONDecodeError:
                 pass
         state["srs"] = srs
+    finally:
+        con.close()
     return state
 
 
@@ -155,33 +201,45 @@ def write_patch(patch: dict) -> int:
     patch 里出现 srs 就按词逐条 upsert；其他键整体覆盖。
     """
     n = 0
-    with _lock, db() as con:
-        srs = patch.get("srs")
-        if isinstance(srs, dict) and srs:
-            rows = [(int(k), json.dumps(v, separators=(",", ":")))
-                    for k, v in srs.items() if str(k).lstrip("-").isdigit()]
-            con.executemany(
-                "INSERT INTO srs(i, j) VALUES(?, ?) "
-                "ON CONFLICT(i) DO UPDATE SET j = excluded.j",
-                rows,
-            )
-            n += len(rows)
-
-        for key in ("settings", "screen", "fav", "days", "drafts", "screenPos"):
-            if key in patch:
-                con.execute(
-                    "INSERT INTO kv(k, v) VALUES(?, ?) "
-                    "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
-                    (key, json.dumps(patch[key], ensure_ascii=False, separators=(",", ":"))),
+    with _lock:
+        con = db()
+        try:
+            srs = patch.get("srs")
+            if isinstance(srs, dict) and srs:
+                rows = [(int(k), json.dumps(v, separators=(",", ":")))
+                        for k, v in srs.items() if str(k).lstrip("-").isdigit()]
+                con.executemany(
+                    "INSERT INTO srs(i, j) VALUES(?, ?) "
+                    "ON CONFLICT(i) DO UPDATE SET j = excluded.j",
+                    rows,
                 )
-                n += 1
+                n += len(rows)
+
+            for key in _KV_KEYS:
+                if key in patch:
+                    con.execute(
+                        "INSERT INTO kv(k, v) VALUES(?, ?) "
+                        "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                        (key, json.dumps(patch[key], ensure_ascii=False, separators=(",", ":"))),
+                    )
+                    n += 1
+            con.commit()
+        finally:
+            # 显式关闭：连接挂着不放，Windows 上会锁住 .db 文件，
+            # 导致「备份 / 删除整个文件夹」时报“另一个程序正在使用此文件”
+            con.close()
     return n
 
 
 def reset_state() -> None:
-    with _lock, db() as con:
-        con.execute("DELETE FROM srs")
-        con.execute("DELETE FROM kv")
+    with _lock:
+        con = db()
+        try:
+            con.execute("DELETE FROM srs")
+            con.execute("DELETE FROM kv")
+            con.commit()
+        finally:
+            con.close()
 
 
 # --------------------------------------------------------------------------
@@ -199,7 +257,7 @@ MIME_OVERRIDE = {
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CET6Local/1.0"
+    server_version = "CET6Local/2.0"
 
     # ---------- 工具方法 ----------
 
@@ -293,14 +351,11 @@ class Handler(BaseHTTPRequestHandler):
         if ctype is None:
             ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         body = target.read_bytes()
-        # 数据与代码用强缓存 + ETag 协商，保证改完刷新即生效
         self._send(200, body, ctype, cache="no-cache")
 
     # ---------- GET 接口 ----------
 
     def _api_get(self, path: str) -> None:
-        q = parse_qs(urlparse(self.path).query)
-
         if path == "/api/words":
             raw, etag = words_payload()
             return self._send(200, raw, "application/json; charset=utf-8",
@@ -354,9 +409,7 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(state, dict) or not state:
                 return self._err(400, "备份内容为空或格式不对")
             reset_state()
-            patch = {k: state[k] for k in
-                     ("settings", "screen", "fav", "days", "drafts", "screenPos")
-                     if k in state}
+            patch = {k: state[k] for k in _KV_KEYS if k in state}
             if isinstance(state.get("srs"), dict):
                 patch["srs"] = state["srs"]
             write_patch(patch)
@@ -366,60 +419,34 @@ class Handler(BaseHTTPRequestHandler):
 
 
 # --------------------------------------------------------------------------
-# 启动
+# 启动 / 停止
 # --------------------------------------------------------------------------
 
-def find_port(start: int, tries: int = 20) -> int:
-    """端口被占用时自动往后找一个可用的。"""
-    import socket
-    for p in range(start, start + tries):
-        with socket.socket() as s:
-            try:
-                s.bind(("127.0.0.1", p))
-                return p
-            except OSError:
-                continue
-    raise SystemExit(f"端口 {start}–{start + tries} 都被占用了，请用 --port 换一个")
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = False
 
 
-def main() -> None:
-    # Windows 控制台默认 GBK，避免打印中文炸掉
+def start_in_thread(port: int = 0) -> tuple[Server, int]:
+    """
+    起一个只监听 127.0.0.1 的服务。port=0 时由系统分配空闲端口，
+    多个窗口 / 多份拷贝同时开也不会撞端口。
+
+    allow_reuse_address 关掉了：Windows 上开着它会让两个进程悄悄绑同一个
+    端口，第二个的请求被第一个接走，症状是「新窗口显示旧数据」。
+    """
+    init_db()
+    httpd = Server(("127.0.0.1", port), Handler)
+    th = threading.Thread(target=httpd.serve_forever, name="cet6-http", daemon=True)
+    th.start()
+    return httpd, httpd.server_address[1]
+
+
+def stop(httpd: Server | None) -> None:
+    if httpd is None:
+        return
     try:
-        sys.stdout.reconfigure(encoding="utf-8")   # type: ignore[attr-defined]
+        httpd.shutdown()
+        httpd.server_close()
     except Exception:  # noqa: BLE001
         pass
-
-    ap = argparse.ArgumentParser(description="六级冲刺 · 本地版")
-    ap.add_argument("--port", type=int, default=8765, help="监听端口，默认 8765")
-    ap.add_argument("--no-open", action="store_true", help="不要自动打开浏览器")
-    args = ap.parse_args()
-
-    if not (DATA_DIR / "words.json").exists():
-        raise SystemExit(f"找不到词库：{DATA_DIR / 'words.json'}\n请确认 data 目录完整。")
-
-    init_db()
-    port = find_port(args.port)
-    url = f"http://127.0.0.1:{port}/"
-
-    print()
-    print("  六级冲刺 · 本地版已启动")
-    print("  " + "-" * 40)
-    print(f"  地址：{url}")
-    print(f"  数据：{DB_PATH}")
-    print("  停止：按 Ctrl+C")
-    print()
-
-    if not args.no_open:
-        threading.Timer(0.6, lambda: webbrowser.open(url)).start()
-
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        print("\n  已停止。进度都存好了，下次接着学。\n")
-    finally:
-        httpd.server_close()
-
-
-if __name__ == "__main__":
-    main()

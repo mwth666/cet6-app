@@ -1,43 +1,46 @@
-# 六级冲刺 · 本地版
+# 六级冲刺 · 桌面版
 
-一个跑在自己电脑上的英语六级备考工具。5301 个六级词，**不孤立背单词，每个词都放进句子里理解**；外带听力、阅读、写作、翻译四个模块的专项练习。
+一个装在电脑上的英语六级备考软件。5301 个六级词，**不孤立背单词，每个词都放进句子里理解**；外带听力、阅读、写作、翻译四个模块的专项练习。
 
-不需要注册、不需要联网、不需要装依赖。clone 下来双击启动，浏览器里就能用。
+双击图标就开窗，不联网、不注册、不占浏览器标签页。
 
-![今日任务](docs/screenshots/home.png)
+![主界面](docs/screenshots/app-window.png)
 
-## 快速开始
+## 装上就能用（Windows）
 
-需要 Python 3.9 或更高版本（[官网下载](https://www.python.org/downloads/)，Windows 安装时记得勾选 `Add Python to PATH`）。
+1. 打开 [Releases](https://github.com/mwth666/cet6-app/releases) 下载 `CET6-Sprint-Windows.zip`
+2. 解压到任意位置（**别只把 exe 拖出来**，旁边的 `_internal` 是运行库）
+3. 双击 `六级冲刺.exe`
+
+不需要装 Python，不需要装任何运行库，Windows 10 / 11 自带所需的 WebView2。
+
+启动大约 1 秒。学习进度存在程序旁边的 `userdata/progress.db`，**整个文件夹拷走就是完整体**，换电脑连进度一起带走。
+
+## 从源码跑 / 自己改
 
 ```bash
 git clone https://github.com/mwth666/cet6-app.git
 cd cet6-app
+pip install pywebview
+python app.py
 ```
 
-不想装 Git 也行：打开 [github.com/mwth666/cet6-app](https://github.com/mwth666/cet6-app)，点绿色 `Code` → `Download ZIP`，解压后进目录，同样双击启动。
+只依赖一个 `pywebview`（开原生窗口用），其余全是 Python 标准库和前端的原生 JS，没有构建步骤。
 
-**Windows**：双击 `start.bat`
-
-**macOS**：双击 `start.command`（首次若提示无法打开，右键 → 打开；或在终端执行 `chmod +x start.command`）
-
-**Linux / 终端**：`./start.sh`
-
-或者一条命令，三个平台通用：
+重新打包成 exe：
 
 ```bash
-python server.py
+pip install pyinstaller pillow
+python build.py     # 产物在 dist/六级冲刺/
 ```
 
-浏览器会自动打开 `http://127.0.0.1:8765/`。关掉终端窗口或者按 `Ctrl+C` 就停止。
-
-> 端口 8765 被占用时会自动往后找（8766、8767…），启动时打印的地址为准。
+`build.py` 会带上 `assets/icon.ico`、把 `web/` 和 `data/` 一起塞进去，输出一个 29 MB 的免安装目录。
 
 ## 每天怎么用
 
 首页只有一件事要你做：**完成今日任务**。
 
-30 天倒计时环里写着今天的分母：新词 166 个 + 待复习的词。点进去就是一轮一轮的练习，做完自动记录，不用手动打卡。
+30 天倒计时环里写着今天的分母：新词 177 个 + 待复习的词。点进去就是一轮一轮的练习，做完自动记录，不用手动打卡。
 
 | 时间 | 做什么 | 在哪 |
 |---|---|---|
@@ -199,9 +202,10 @@ userdata/progress.db        SQLite，学习进度就是这一个文件
 
 没有 npm、没有构建、没有 `pip install`。理由很实际：**别人 clone 下来要能立刻跑起来**，而环境问题是最容易劝退的一步。
 
-- 后端：`http.server` 的 `ThreadingHTTPServer` + `sqlite3`，425 行
+- 后端：`http.server` 的 `ThreadingHTTPServer` + `sqlite3`，约 470 行
 - 前端：原生 ES5 语法 + 手写 hash 路由，零框架
-- 发音：浏览器内置 `speechSynthesis`，离线可用；不支持的浏览器自动静音，其余功能不受影响
+- 外壳：pywebview + WebView2，单进程窗口，前后端同进程
+- 发音：走系统语音合成（WebView2 里的 `speechSynthesis`），离线可用；系统没装英文语音包时自动静音，其余功能不受影响
 - 全量代码约 5000 行，其中包含完整注释
 
 ### 数据怎么传
@@ -217,14 +221,16 @@ userdata/progress.db        SQLite，学习进度就是这一个文件
 
 ```
 cet6-app/
-├── server.py                  后端（HTTP + SQLite），零依赖
-├── start.bat / .command / .sh 三个平台的启动脚本
+├── app.py                     桌面入口：原生窗口 + 单实例锁
+├── backend.py                 后端：词库、进度（SQLite）、本地接口
+├── build.py                   PyInstaller 打包脚本
+├── assets/icon.ico            应用图标
 ├── data/
 │   ├── words.json             5301 词，含例句、音标、词块
 │   └── content/               听力/阅读/写作/翻译的题目数据
-├── web/
+├── web/                       前端（原生 JS，无框架无构建）
 │   ├── index.html             单页外壳
-│   ├── css/app.css            全部样式（手写设计系统，约 740 行）
+│   ├── css/app.css            全部样式（手写设计系统，约 750 行）
 │   └── js/
 │       ├── core.js            fetch 封装、hash 路由、工具函数
 │       ├── config.js          配额、考试日期、冲刺模式开关
@@ -234,12 +240,30 @@ cet6-app/
 │       ├── quiz.js            七种题型的生成与判分
 │       ├── queue.js           每日取词队列
 │       ├── article.js         回顾长文的生成器（分章、编排、确定性随机）
-│       ├── audio.js           发音（Web Speech + 逐句朗读队列）
+│       ├── audio.js           发音（语音合成 + 逐句朗读队列）
 │       ├── boot.js            启动与首屏
 │       └── views/             12 个页面视图
+├── tools/                     测试与巡检脚本
 ├── userdata/                  你的进度（不进仓库）
 └── docs/screenshots/          README 用的截图
 ```
+
+### 前端和后端怎么分工
+
+窗口里跑的是本地前端，后端是同一进程里的 Python：
+
+```
+六级冲刺.exe
+├── pywebview 开一个原生窗口，加载 http://127.0.0.1:<随机端口>/
+├── WebView2 渲染 web/ 里的 HTML/CSS/JS   ← 前端
+└── 后台线程跑 HTTP 服务                  ← 后端
+      ├── GET  /api/words    词库（1.7MB，带 gzip + ETag）
+      ├── GET  /api/state    整份学习进度
+      ├── POST /api/patch    增量写入（只传改动的词）
+      └── POST /api/import   从备份恢复
+```
+
+端口是启动时由系统分配的，只在 `127.0.0.1` 上监听，不开防火墙、不出本机。之所以中间隔一层 HTTP 而不是让前端直接调 Python 函数，是因为词库有 1.7MB：走 HTTP 能顺带拿到 gzip 和缓存协商，窗口第一屏明显更快。这也意味着**前端可以脱离窗口单独调试**——`python -c "import backend; backend.start_in_thread(8765)"` 之后用浏览器打开就行。
 
 ### 换成自己的词库
 
@@ -277,7 +301,7 @@ node tools/test_article.js
 python tools/smoke_routes.py
 ```
 
-第三个需要先启动服务（`python server.py --no-open`），并且要本机装有 Chrome / Chromium。
+第四个会自己把后端拉起来（随机端口、临时数据目录），不用事先开服务，也不会碰到你 `userdata` 里的真实进度，只要本机装有 Chrome / Chromium。
 
 当前结果：
 
@@ -290,29 +314,29 @@ python tools/smoke_routes.py
 
 ## 常见问题
 
-**双击没反应 / 闪一下就没了**
+**双击没反应**
 
-没装 Python，或者装了但没加进 PATH。在终端里执行 `python --version` 确认；Windows 重装时勾选 `Add Python to PATH`。
+先看任务栏有没有已经开着的窗口——程序只允许开一个实例，重复双击只会提示「已经在运行」。
 
-**页面空白 / 一直在加载**
+**提示「缺少文件」**
 
-必须通过 `python server.py` 启动，**不能直接双击 `web/index.html`**——前端要调后端接口读进度。看到「启动」字样和地址才算成功。
+解压时只把 `六级冲刺.exe` 拖了出来。`_internal` 文件夹是运行库，必须和 exe 放在一起。
+
+**窗口打开是白的，一直转圈**
+
+杀毒软件拦了本地回环连接（程序启动时会在 `127.0.0.1` 上开一个随机端口给窗口自己用）。把整个文件夹加进白名单后再启动。
 
 **没有声音**
 
-发音用浏览器内置的语音合成。Chrome / Edge 一般自带英文语音；如果系统里没装英文语音包，会静音。Windows 可以在「设置 → 时间和语言 → 语言」里给英语添加语音。听力模块会自动切成「遮蔽模式」（先播、播完再显示文字），不影响练习效果。
-
-**端口被占用**
-
-会自动换端口，看终端里打印的地址。也可以指定：`python server.py --port 9000`。
+发音用系统内置的语音合成。Windows 自带英文语音，但如果系统里没装英文语音包，会静音——在「设置 → 时间和语言 → 语言」里给英语添加语音即可。听力模块也没声音时，会自动切成「遮蔽模式」（先播、播完再显示文字），不影响练习效果。
 
 **换电脑后进度没了**
 
-进度在 `userdata/progress.db`。换机器前先在「我的」里导出备份，或者直接把这个文件拷过去。
+进度在程序旁边的 `userdata/progress.db`。换机器前在「我的」里导出一份备份，或者直接把整个程序文件夹拷过去。
 
 **能不能多人用**
 
-能。每个人的进度在自己机器上，互不干扰。如果放在同一台电脑上给多人用，各自导出一份备份即可。
+能。每个人的进度在自己的机器上，互不干扰。同一台电脑给多人用的话，各自导出一份备份、用完再导入即可。
 
 ## 授权
 
